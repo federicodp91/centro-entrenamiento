@@ -1,5 +1,10 @@
 # Centro de Entrenamiento
 
+👉 **Entrar a la app: https://federicodp91.github.io/centro-entrenamiento/**
+
+Para instalarla en el celular abrí ese link y elegí "Instalar app" o "Agregar a pantalla de inicio" (Chrome: menú ⋮; Safari: botón Compartir).
+`localhost` solo funciona en la PC donde corre el servidor, no en el celular.
+
 App web (PWA) para entrenar, con un catálogo de 1012 ejercicios. Sin dependencias ni build: HTML, CSS y JavaScript puros. Los datos se guardan en el navegador (localStorage).
 
 ## Funciones
