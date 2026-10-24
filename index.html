@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Centro de Entrenamiento</title>
+  <meta name="theme-color" content="#0f1115">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Entreno">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="title">Ejercicios</h1>
+    <div id="topActions"></div>
+  </header>
+
+  <main id="view"></main>
+
+  <div id="restBar" class="rest-bar" hidden>
+    <span class="rest-label">Descanso</span>
+    <strong id="restTime">0:00</strong>
+    <button data-action="rest-add" data-sec="-15">−15</button>
+    <button data-action="rest-add" data-sec="15">+15</button>
+    <button data-action="rest-skip">Saltar</button>
+  </div>
+
+  <nav class="tabs">
+    <button data-tab="ejercicios" class="active"><span>📚</span>Ejercicios</button>
+    <button data-tab="rutinas"><span>📋</span>Rutinas</button>
+    <button data-tab="entrenar"><span>🏋️</span>Entrenar</button>
+    <button data-tab="historial"><span>📈</span>Historial</button>
+  </nav>
+
+  <dialog id="modal"><div id="modalBody"></div></dialog>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="data/exercises.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
