@@ -1,7 +1,7 @@
 // Cache de la app para que funcione sin conexión.
 // Subí la versión cuando cambies archivos para forzar la actualización.
-const CACHE = "entreno-v2";
-const FILES = ["./", "index.html", "styles.css", "app.js", "data/exercises.js", "manifest.webmanifest",
+const CACHE = "entreno-v3";
+const FILES = ["./", "index.html", "styles.css", "app.js", "config.js", "data/exercises.js", "manifest.webmanifest",
   "icon.svg", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {

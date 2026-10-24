@@ -31,6 +31,7 @@ function defaultState() {
     active: null,     // sesión en curso
     rest: null,       // { endsAt }
     defaultRest: 90,
+    drive: { auto: true, connected: false, fileId: null, lastBackup: null },
   };
 }
 
@@ -551,6 +552,7 @@ function finishSession() {
   updateRestBar();
   toast(items.length ? "¡Entrenamiento guardado! 💪" : "Entrenamiento terminado");
   go(items.length ? "historial" : "entrenar");
+  if (items.length && state.drive.auto && state.drive.connected && driveConfigured()) backupToDrive();
 }
 
 /* Temporizador de descanso */
@@ -599,15 +601,35 @@ function sessionVolume(s) {
   return s.items.reduce((a, it) => a + it.sets.reduce((b, st) => b + setVolume(st), 0), 0);
 }
 
+function driveStatusText() {
+  if (driveBusy) return driveBusy;
+  if (!driveConfigured()) return "Falta configurar la conexión con Google (ver README).";
+  if (!state.drive.lastBackup) return "Todavía no hiciste ningún backup.";
+  const d = new Date(state.drive.lastBackup);
+  return `Último backup: ${fmtDate(d)} ${d.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" })}`;
+}
+
 function renderHistory() {
-  $("#topActions").innerHTML = `
-    <button class="btn sm" data-action="export">Exportar</button>
-    <button class="btn sm" data-action="import">Importar</button>`;
+  $("#topActions").innerHTML = `<button class="btn sm primary" data-action="drive-backup">☁ Backup</button>`;
   const h = state.history;
   const weekAgo = Date.now() - 7 * 864e5;
   const totalVol = h.reduce((a, s) => a + sessionVolume(s), 0);
 
   $("#view").innerHTML = `
+    <div class="card">
+      <div class="row">
+        <div class="spacer">
+          <h3>☁ Backup en Google Drive</h3>
+          <div class="sub" id="driveStatus">${esc(driveStatusText())}</div>
+        </div>
+        <button class="btn primary" data-action="drive-backup" ${driveBusy ? "disabled" : ""}>Hacer backup</button>
+      </div>
+      <label class="row" style="margin-top:10px;font-size:14px">
+        <input type="checkbox" id="driveAuto" ${state.drive.auto ? "checked" : ""}>
+        Backup automático al terminar cada entrenamiento
+      </label>
+      <button class="btn sm" style="margin-top:10px" data-action="drive-restore" ${driveBusy ? "disabled" : ""}>Restaurar desde Drive</button>
+    </div>
     <div class="stats">
       <div class="stat"><b>${h.length}</b><span>Entrenamientos</span></div>
       <div class="stat"><b>${h.filter(s => s.inicio > weekAgo).length}</b><span>Últimos 7 días</span></div>
@@ -628,31 +650,140 @@ function renderHistory() {
         </div>
       </details>`).join("")
     : `<div class="empty"><span class="big">📈</span>Todavía no hay entrenamientos guardados.</div>`}`;
+
+  $("#driveAuto").addEventListener("change", e => { state.drive.auto = e.target.checked; save(); });
 }
 
-function exportData() {
-  const data = JSON.stringify({ app: "centro-entrenamiento", version: 1, exportado: new Date().toISOString(), state }, null, 2);
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([data], { type: "application/json" }));
-  a.download = `entrenamiento-backup-${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+/* ===================== Backup en Google Drive ===================== */
+
+// El scope drive.file solo da acceso a los archivos que crea esta app, nada más de tu Drive.
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const DRIVE_FILE = "Centro de Entrenamiento - backup.json";
+let driveToken = null;   // { value, exp }
+let tokenClient = null;
+let driveBusy = "";      // texto de estado mientras hay una operación en curso
+
+function driveConfigured() {
+  return !!(window.APP_CONFIG && window.APP_CONFIG.googleClientId);
 }
 
-function importData() {
-  const inp = document.createElement("input");
-  inp.type = "file";
-  inp.accept = "application/json,.json";
-  inp.onchange = async () => {
-    try {
-      const parsed = JSON.parse(await inp.files[0].text());
-      if (!parsed.state) throw new Error("formato");
-      if (!confirm("Esto reemplaza todos tus datos actuales. ¿Continuar?")) return;
-      state = Object.assign(defaultState(), parsed.state);
-      save(); reindex(); render(); toast("Datos importados");
-    } catch (e) { toast("Archivo inválido"); }
-  };
-  inp.click();
+// Se llama directo desde un toque del usuario para que Google pueda abrir su ventana de permiso.
+function getDriveToken() {
+  if (driveToken && Date.now() < driveToken.exp) return Promise.resolve(driveToken.value);
+  return new Promise((resolve, reject) => {
+    if (!(window.google && google.accounts && google.accounts.oauth2)) {
+      return reject(new Error("No se pudo cargar Google. Revisá la conexión."));
+    }
+    if (!tokenClient) {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: window.APP_CONFIG.googleClientId,
+        scope: DRIVE_SCOPE,
+        callback: () => {},
+      });
+    }
+    tokenClient.callback = resp => {
+      if (resp.error) return reject(new Error("Google rechazó el permiso"));
+      driveToken = { value: resp.access_token, exp: Date.now() + (resp.expires_in - 60) * 1000 };
+      resolve(driveToken.value);
+    };
+    tokenClient.error_callback = err =>
+      reject(new Error(err && err.type === "popup_closed" ? "Se cerró la ventana de Google" : "No se pudo conectar con Google"));
+    tokenClient.requestAccessToken({ prompt: state.drive.connected ? "" : "consent" });
+  });
+}
+
+async function driveFetch(url, opts = {}) {
+  const token = await getDriveToken();
+  const res = await fetch(url, Object.assign({}, opts, {
+    headers: Object.assign({ Authorization: "Bearer " + token }, opts.headers),
+  }));
+  if (res.status === 401) {
+    driveToken = null;
+    throw new Error("La sesión de Google venció, tocá de nuevo");
+  }
+  return res;
+}
+
+async function findBackupFileId() {
+  const q = encodeURIComponent(`name='${DRIVE_FILE}' and trashed=false`);
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&orderBy=modifiedTime desc&fields=files(id)`);
+  if (!res.ok) throw new Error("Drive respondió " + res.status);
+  const files = (await res.json()).files;
+  return files.length ? files[0].id : null;
+}
+
+function backupPayload() {
+  const copy = Object.assign({}, state, { active: null, rest: null });
+  delete copy.drive;
+  return JSON.stringify({ app: "centro-entrenamiento", version: 1, fecha: new Date().toISOString(), state: copy });
+}
+
+function setDriveBusy(text) {
+  driveBusy = text;
+  if (ui.tab === "historial") render();
+}
+
+async function backupToDrive() {
+  if (!driveConfigured()) return toast("Falta configurar la conexión con Google (ver README)");
+  if (driveBusy) return;
+  const tokenReady = getDriveToken(); // pedir permiso ya, dentro del toque
+  setDriveBusy("Guardando en Drive…");
+  try {
+    await tokenReady;
+    state.drive.connected = true;
+    const body = backupPayload();
+    const id = state.drive.fileId || await findBackupFileId();
+    let res = id && await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media&fields=id`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body,
+    });
+    if (!res || res.status === 404) {
+      const b = "ce" + uid();
+      const meta = JSON.stringify({ name: DRIVE_FILE, mimeType: "application/json" });
+      res = await driveFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
+        method: "POST",
+        headers: { "Content-Type": `multipart/related; boundary=${b}` },
+        body: `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n` +
+              `--${b}\r\nContent-Type: application/json\r\n\r\n${body}\r\n--${b}--`,
+      });
+    }
+    if (!res.ok) throw new Error("Drive respondió " + res.status);
+    state.drive.fileId = (await res.json()).id;
+    state.drive.lastBackup = Date.now();
+    save();
+    toast("Backup guardado en Drive ✓");
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    setDriveBusy("");
+  }
+}
+
+async function restoreFromDrive() {
+  if (!driveConfigured()) return toast("Falta configurar la conexión con Google (ver README)");
+  if (driveBusy) return;
+  const tokenReady = getDriveToken();
+  setDriveBusy("Buscando backup en Drive…");
+  try {
+    await tokenReady;
+    state.drive.connected = true;
+    const id = await findBackupFileId();
+    if (!id) throw new Error("No hay ningún backup en tu Drive todavía");
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`);
+    if (!res.ok) throw new Error("Drive respondió " + res.status);
+    const parsed = await res.json();
+    if (!parsed.state) throw new Error("El backup de Drive no tiene un formato válido");
+    const when = parsed.fecha ? new Date(parsed.fecha).toLocaleString("es") : "fecha desconocida";
+    if (!confirm(`Backup del ${when} (${(parsed.state.history || []).length} entrenamientos).\n` +
+                 "Esto reemplaza los datos de este celular. ¿Continuar?")) return;
+    const drive = Object.assign({}, state.drive, { fileId: id });
+    state = Object.assign(defaultState(), parsed.state, { drive });
+    save(); reindex();
+    toast("Datos restaurados desde Drive ✓");
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    setDriveBusy("");
+  }
 }
 
 /* ===================== Modal ===================== */
@@ -757,8 +888,8 @@ const actions = {
     state.history = state.history.filter(s => s.id !== el.dataset.id);
     save(); render();
   },
-  "export": exportData,
-  "import": importData,
+  "drive-backup": backupToDrive,
+  "drive-restore": restoreFromDrive,
 };
 
 document.addEventListener("click", e => {
